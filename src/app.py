@@ -6,7 +6,7 @@ import json
 
 from conf import conf
 
-scope = "user-read-private playlist-read-private playlist-read-collaborative"
+scope = "user-read-private playlist-read-private playlist-read-collaborative user-library-read"
 
 sp = spotipy.Spotify(
     auth_manager=SpotifyOAuth(
@@ -20,27 +20,28 @@ sp = spotipy.Spotify(
 
 
 def get_playlists():
-    
-    user = sp.current_user()
-    
-    
+
     playlists = sp.current_user_playlists()
-    print(len(playlists["items"]))
-    print(playlists["items"])
-    
+
+    me = sp.current_user()["id"]
+
     for playlist in playlists["items"]:
-        print(json.dumps(playlist, indent=4))
-        return
-    
-    # while playlists:
-    #     for i, playlist in enumerate(playlists['items']):
-    #         print(f"{i + 1 + playlists['offset']:4d} {playlist['uri']} {playlist['name']}")
-    #     if playlists['next']:
-    #         playlists = sp.next(playlists)
-    #     else:
-    #         playlists = None
-    
-    
+        if playlist["owner"]["id"] != me and not playlist["collaborative"]:
+            print("Skipping inaccessible playlist:", playlist["name"])
+            continue
+
+        items = sp.playlist_items(playlist["id"])
+        print(playlist["name"])
+        for item in items.get("items"):
+            # print(item.get("item").get("name"))
+            continue
+
+    liked = sp.current_user_saved_tracks(limit=50)
+
+    for item in liked["items"]:
+        track = item["track"]
+        print(track["name"], "-", track["artists"][0]["name"])
+
 
 if __name__ == "__main__":
     get_playlists()
