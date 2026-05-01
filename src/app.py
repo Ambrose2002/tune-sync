@@ -1,8 +1,5 @@
-import requests
-import base64
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
-import json
 
 from conf import conf
 
@@ -28,6 +25,7 @@ sp = spotipy.Spotify(
 
 
 def get_playlists():
+    """Print accessible current-user playlists and all liked songs."""
 
     playlists = sp.current_user_playlists()
 
@@ -38,20 +36,35 @@ def get_playlists():
             print("Skipping inaccessible playlist:", playlist["name"])
             continue
 
-        items = sp.playlist_items(playlist["id"])
+        items = sp.playlist_items(playlist["id"], limit=50)
         print(playlist["name"])
-        for item in items.get("items"):
-            # print(item.get("item").get("name"))
-            continue
+
+        while items:
+            for item in items["items"]:
+                # print(item.get("item").get("name"))
+                continue
+
+            if items["next"]:
+                items = sp.next(items)
+            else:
+                items = None
 
     liked = sp.current_user_saved_tracks(limit=50)
 
-    for item in liked["items"]:
-        track = item["track"]
-        print(track["name"], "-", track["artists"][0]["name"])
+    while liked:
+        for item in liked["items"]:
+            track = item["track"]
+            print(track["name"], "-", track["artists"][0]["name"])
+
+        if liked["next"]:
+            liked = sp.next(liked)
+        else:
+            liked = None
 
 
 def search_track_uri(track_name):
+    """Return the Spotify URI for the first track search result, or None."""
+
     result = sp.search(q=track_name, type="track", limit=1)
     tracks = result["tracks"]["items"]
 
@@ -62,7 +75,8 @@ def search_track_uri(track_name):
 
 
 def create_playlist(name, items, public = True, collaborative=False, description=""):
-    
+    """Create a Spotify playlist from a list of track names and return it."""
+
     playlist = sp.current_user_playlist_create(name, public, collaborative, description)
     playlist_id = playlist["id"]
     
@@ -85,3 +99,4 @@ def create_playlist(name, items, public = True, collaborative=False, description
 
 if __name__ == "__main__":
     get_playlists()
+    create_playlist("trial", ["power of love", "oliver twist"])
