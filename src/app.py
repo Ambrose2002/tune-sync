@@ -6,7 +6,15 @@ import json
 
 from conf import conf
 
-scope = "user-read-private playlist-read-private playlist-read-collaborative user-library-read"
+scope = (
+    "user-read-private "
+    "playlist-read-private "
+    "playlist-read-collaborative "
+    "user-library-read "
+    "playlist-modify-public "
+    "playlist-modify-private"
+)
+
 
 sp = spotipy.Spotify(
     auth_manager=SpotifyOAuth(
@@ -41,6 +49,38 @@ def get_playlists():
     for item in liked["items"]:
         track = item["track"]
         print(track["name"], "-", track["artists"][0]["name"])
+
+
+def search_track_uri(track_name):
+    result = sp.search(q=track_name, type="track", limit=1)
+    tracks = result["tracks"]["items"]
+
+    if not tracks:
+        return None
+
+    return tracks[0]["uri"]
+
+
+def create_playlist(name, items, public = True, collaborative=False, description=""):
+    
+    playlist = sp.current_user_playlist_create(name, public, collaborative, description)
+    playlist_id = playlist["id"]
+    
+    uris = []
+    
+    for track_name in items:
+        uri = search_track_uri(track_name)
+        if uri:
+            uris.append(uri)
+            
+        else:
+            print("Could not find:", track_name)
+    
+    if uris:
+        result = sp.playlist_add_items(playlist_id, uris)
+        print(result)
+    
+    return playlist
 
 
 if __name__ == "__main__":
