@@ -2,10 +2,10 @@
 
 A tool for transferring playlists between music streaming services.
 
-## Current checkpoint: complete Spotify playlist listings
+## Current checkpoint: complete Spotify playlist snapshots
 
 Tune Sync validates settings, connects a Spotify account using Authorization
-Code with PKCE, and lists all playlists returned by Spotify for that account.
+Code with PKCE, lists playlists, and reads ordered playlist snapshots.
 Cross-service transfers are not implemented yet.
 The CLI connection workflow currently supports macOS and Linux.
 
@@ -59,6 +59,10 @@ myenv/bin/python -m tune_sync spotify playlists
 # Emit a single JSON document for inspection or later integration.
 myenv/bin/python -m tune_sync spotify playlists --json
 
+# Read all entries of a selected playlist (replace PLAYLIST_ID).
+myenv/bin/python -m tune_sync spotify playlist PLAYLIST_ID
+myenv/bin/python -m tune_sync spotify playlist PLAYLIST_ID --json
+
 # Remove the local connection for this client ID.
 myenv/bin/python -m tune_sync spotify disconnect
 ```
@@ -107,6 +111,67 @@ The old project-root `.spotify_cache` is neither imported nor changed. Disconnec
 removes only the new local token record; it does not revoke Spotify's app grant or
 remove the legacy cache. To revoke provider authorization, remove the app from
 your Spotify account's Apps page.
+
+### Playlist snapshots and Step 5 manual checks
+
+Use a 22-character playlist ID from `spotify playlists`, then run:
+
+```sh
+myenv/bin/python -m tune_sync spotify playlist PLAYLIST_ID
+myenv/bin/python -m tune_sync spotify playlist PLAYLIST_ID --json
+```
+
+No additional permissions are needed if you connected in Step 4. Keep using the
+same `--data-dir` override if you previously selected one. IDs, rather than share
+URLs or Spotify URIs, are accepted in this checkpoint.
+
+The command reads playlist metadata, all item pages (up to 50 entries per request),
+and metadata again. It checks that the playlist version and selected metadata
+have not changed, all page totals agree, and positions are contiguous. A missing
+version, changed playlist, truncated page, or failed request produces an error
+without printing a partial result. These checks detect changes reported by Spotify;
+they do not lock the remote playlist or guarantee that it stays unchanged afterward.
+
+The JSON result contains account identity, provider, playlist metadata, description,
+Spotify `snapshot_id`, a UTC `captured_at` time, source country when available, a
+SHA-256 fingerprint, and ordered `entries`. The fingerprint covers normalized
+metadata and entries, excluding capture time. It is a local comparison aid, not
+a Spotify version identifier. Output is not automatically saved to disk.
+
+Each entry has a **zero-based** source `position`, status, reason, local-file flag,
+added timestamp when available, and item metadata. Human-readable numbering starts
+at 1. Intentional repeated songs remain separate entries, including across page
+boundaries. Null/unavailable items keep their positions instead of disappearing.
+
+| Status | Meaning at this checkpoint |
+| --- | --- |
+| `supported` | A catalog track with no explicit source restriction reported; not a guarantee of playability or a destination match |
+| `unavailable` | Missing item, missing catalog ID, or explicitly unplayable/restricted source item |
+| `unsupported` | Local file, episode, or unknown media type; retained for reporting |
+
+Available item metadata includes title, all credited artist names, album, duration,
+ISRC, explicit flag, provider ID/URI/URL, reported playability, restriction reason,
+and the original track ID if Spotify relinked it. Missing metadata stays unknown;
+version words such as “Live” and “Remix” are preserved. An unavailable source track
+may still be matchable on another service later. No matching happens in this step.
+
+Manual acceptance:
+
+1. Read an owned playlist and compare its order/count with Spotify's native playlist
+   order (disable any custom title/artist sort before comparing).
+2. Read a playlist with more than 50 entries if you have one; check the boundary
+   around entries 50 and 51 and the final entry.
+3. Check a repeated song if available; it should appear in both positions.
+4. Check an empty playlist or one with a local file, unavailable item, or episode
+   if available. Offline tests cover these cases, so no fixture playlist is required.
+5. Inspect `--json` for metadata and zero-based positions. Both JSON and the default
+   output represent the same complete snapshot.
+6. A followed playlist may return an access error. Spotify can list its metadata
+   while refusing content access; the command reports this instead of claiming it
+   is empty. Try an owned or accessible collaborative playlist for the main test.
+
+Avoid editing the playlist during the main comparison. If it changes while being
+read, the command asks you to retry rather than silently combining versions.
 
 ### Playlist listing and Step 4 manual checks
 
@@ -194,13 +259,14 @@ short-lived loopback server; no test contacts Spotify or uses real credentials.
 `pyproject.toml` declares direct dependencies. `requirements.txt` is an editable
 installation shortcut, not a lockfile. Application code is in `src/tune_sync/`:
 `app.py` dispatches commands, `conf.py` validates settings, `auth.py` owns
-connection handling, and `playlists.py` normalizes paginated playlist metadata. Tests import the installed package normally.
+connection handling, `playlists.py` normalizes paginated playlist metadata, and
+`snapshots.py` reads and verifies complete playlist snapshots. Tests import the installed package normally.
 
 The original search/create prototype operations remain in `spotify.py`, with an
 explicit client argument. The old printing-only playlist/liked-song routine has
 been replaced by the structured listing. `create_spotify_client(access_token)` creates a noninteractive client.
-Those prototype operations are not exposed by the CLI; playlist contents,
-matching, and write improvements remain separate planned steps.
+Those prototype operations are not exposed by the CLI; matching and write
+improvements remain separate planned steps.
 
 ### API references
 
@@ -210,3 +276,6 @@ matching, and write improvements remain separate planned steps.
 - [Development-mode requirements](https://developer.spotify.com/documentation/web-api/concepts/quota-modes)
 
 - [Current user playlists and pagination](https://developer.spotify.com/documentation/web-api/reference/get-a-list-of-current-users-playlists)
+
+- [Playlist items](https://developer.spotify.com/documentation/web-api/reference/get-playlists-items)
+- [Playlist metadata and snapshot IDs](https://developer.spotify.com/documentation/web-api/reference/get-playlist)

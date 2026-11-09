@@ -15,12 +15,23 @@ def main(argv=None):
     parser.add_argument("--env-file", type=Path, help="Path to an existing .env file")
     commands = parser.add_subparsers(dest="provider")
     spotify = commands.add_parser("spotify", help="Connect or inspect a Spotify account")
-    spotify.add_argument("action", choices=("connect", "status", "disconnect", "playlists"))
+    spotify.add_argument("action", choices=("connect", "status", "disconnect", "playlists", "playlist"))
+    spotify.add_argument("playlist_id", nargs="?", help="Playlist ID for the playlist command")
     spotify.add_argument("--data-dir", type=Path, help="Application data directory override")
-    spotify.add_argument("--json", action="store_true", help="Emit playlist metadata as JSON (playlists only)")
+    spotify.add_argument("--json", action="store_true", help="Emit playlist listings or snapshots as JSON")
     args = parser.parse_args(argv)
-    if args.provider == "spotify" and args.json and args.action != "playlists":
-        parser.error("--json is only available for spotify playlists")
+    if args.provider == "spotify" and args.json and args.action not in ("playlists", "playlist"):
+        parser.error("--json is only available for spotify playlists or spotify playlist")
+    if args.provider == "spotify":
+        if args.action == "playlist":
+            from .snapshots import validate_playlist_id
+            from .playlists import PlaylistReadError
+            try:
+                validate_playlist_id(args.playlist_id)
+            except PlaylistReadError as error:
+                parser.error(str(error))
+        elif args.playlist_id is not None:
+            parser.error("A playlist ID is only accepted by spotify playlist")
     if args.env_file is not None and not args.env_file.is_file():
         print("Configuration error: --env-file must point to an existing file.", file=sys.stderr)
         return 1
@@ -33,10 +44,13 @@ def main(argv=None):
     if args.provider is None:
         print("Configuration is valid. No login or Spotify API requests were made.")
         return 0
+    if args.action == "playlist":
+        return spotify_command(settings, args.action, args.data_dir,
+                               json_output=args.json, playlist_id=args.playlist_id)
     return spotify_command(settings, args.action, args.data_dir, json_output=args.json)
 
 
-def spotify_command(settings, action, data_dir, *, json_output=False):
+def spotify_command(settings, action, data_dir, *, json_output=False, playlist_id=None):
     from requests.exceptions import RequestException
     from spotipy.exceptions import SpotifyException, SpotifyOauthError
     from .auth import (ConnectionError, ConnectionStore, connected_spotify,
@@ -50,6 +64,13 @@ def spotify_command(settings, action, data_dir, *, json_output=False):
         logger.setLevel(logging.CRITICAL)
     try:
         store = ConnectionStore(data_dir or default_data_dir(), settings.spotify_client_id)
+        if action == "playlist":
+            from .snapshots import read_playlist_snapshot
+            with connected_spotify(settings, store) as (client, account):
+                snapshot = read_playlist_snapshot(client, playlist_id, user_id=account["id"],
+                                                  source_country=account.get("country"))
+            print_snapshot(snapshot, account, json_output=json_output)
+            return 0
         if action == "playlists":
             with connected_spotify(settings, store) as (client, account):
                 playlists = list_playlists(client, user_id=account["id"])
@@ -106,3 +127,21 @@ def print_playlists(playlists, account, *, json_output=False):
         count = str(playlist.item_count) if playlist.item_count is not None else "unknown"
         print(f"{json.dumps(playlist.name)} | ID: {json.dumps(playlist.id)} | {ownership} | items: {count}")
         print(f"  Owner: {json.dumps(playlist.owner_name or playlist.owner_id)} | URL: {json.dumps(playlist.url)}")
+
+
+def print_snapshot(snapshot, account, *, json_output=False):
+    if json_output:
+        print(json.dumps({"account": account, **asdict(snapshot)}, indent=2))
+        return
+    from collections import Counter
+    counts = Counter(entry.status for entry in snapshot.entries)
+    print(f"{json.dumps(snapshot.playlist.name)}: {len(snapshot.entries)} entries; "
+          f"{counts['supported']} supported, {counts['unavailable']} unavailable, "
+          f"{counts['unsupported']} unsupported.")
+    print(f"Version: {json.dumps(snapshot.snapshot_id)} | Captured: {snapshot.captured_at}")
+    for entry in snapshot.entries:
+        name = entry.item.name if entry.item else None
+        artists = ", ".join(entry.item.artists) if entry.item else ""
+        reason = f" ({json.dumps(entry.reason)})" if entry.reason else ""
+        print(f"{entry.position + 1}. {json.dumps(name)} — {json.dumps(artists)} "
+              f"[{entry.status}]{reason}")
