@@ -2,10 +2,11 @@
 
 A tool for transferring playlists between music streaming services.
 
-## Current checkpoint: Spotify connection and status
+## Current checkpoint: complete Spotify playlist listings
 
-Tune Sync currently validates settings and connects a Spotify account using
-Authorization Code with PKCE. Cross-service transfers are not implemented yet.
+Tune Sync validates settings, connects a Spotify account using Authorization
+Code with PKCE, and lists all playlists returned by Spotify for that account.
+Cross-service transfers are not implemented yet.
 The CLI connection workflow currently supports macOS and Linux.
 
 ### Setup
@@ -52,6 +53,12 @@ myenv/bin/python -m tune_sync spotify connect
 # Verify the saved account; refresh expired credentials without opening a browser.
 myenv/bin/python -m tune_sync spotify status
 
+# List playlist metadata, following every page.
+myenv/bin/python -m tune_sync spotify playlists
+
+# Emit a single JSON document for inspection or later integration.
+myenv/bin/python -m tune_sync spotify playlists --json
+
 # Remove the local connection for this client ID.
 myenv/bin/python -m tune_sync spotify disconnect
 ```
@@ -59,9 +66,11 @@ myenv/bin/python -m tune_sync spotify disconnect
 `myenv/bin/tune-sync` is an equivalent entry point. The old `python src/app.py`
 entry point has been replaced.
 
-Connect requests only `user-read-private`, sufficient to identify the account.
-Library and playlist permissions will be introduced with their corresponding
-features. The callback listener runs only during login, binds only to loopback,
+Connect requests `user-read-private`, `playlist-read-private`, and
+`playlist-read-collaborative`. Existing Step 3 connections must run connect again
+to grant the added read permissions. Status still works with the old profile-only
+permissions; playlists reports a reconnect instruction without opening a browser.
+No write permissions are requested. The callback listener runs only during login, binds only to loopback,
 validates the callback path and OAuth state, and closes after success, denial,
 Ctrl-C, or a three-minute timeout. If the browser does not open, visit the printed
 Spotify authorization URL. A busy callback port produces an actionable error.
@@ -99,7 +108,53 @@ removes only the new local token record; it does not revoke Spotify's app grant 
 remove the legacy cache. To revoke provider authorization, remove the app from
 your Spotify account's Apps page.
 
-### Manual acceptance checks
+### Playlist listing and Step 4 manual checks
+
+```sh
+# Existing connections need the new read permissions.
+myenv/bin/python -m tune_sync spotify connect
+myenv/bin/python -m tune_sync spotify playlists
+myenv/bin/python -m tune_sync spotify playlists --json
+```
+
+Compare the result with the playlists owned or followed in your Spotify library,
+including private and collaborative playlists where available. If you have more
+than 50 playlists, check that entries beyond the first 50 appear. Pagination is
+also tested offline with 51 playlists, so you do not need to create test playlists.
+Avoid editing your library during this comparison: paginated listings are not an
+atomic snapshot and Spotify's API order need not match the app's current sort.
+
+The default output shows names, IDs, owners, item counts, and URLs. Names are
+quoted/escaped to keep terminal control characters harmless. The JSON output is
+one object containing `provider`, `account`, `count`, and `playlists`. Each playlist
+has these stable fields:
+
+| Field | Meaning |
+| --- | --- |
+| `id`, `name`, `url` | Spotify playlist identity and link |
+| `owner_id`, `owner_name` | Available owner metadata |
+| `is_owned` | Whether the owner ID matches the connected user's Spotify ID |
+| `public`, `collaborative` | Flags returned by Spotify, without inventing missing values |
+| `item_count` | Reported item count, supporting both current `items` and legacy `tracks` metadata |
+| `contents_access` | Always `not_checked` at this step |
+
+Optional missing fields are `null`; missing counts are not converted to zero.
+A collaborative flag does not establish that this user is a collaborator.
+Followed playlists remain in the listing even if their contents may be restricted.
+This command fetches metadata only, not tracks, liked songs, or individual playlist
+contents. API restrictions mean it cannot promise that every playlist visible
+elsewhere in the Spotify app is returned by this endpoint.
+
+An empty library succeeds with count 0 and an empty array. An unconnected account,
+missing permissions, malformed pagination, repeated playlist IDs, or a failed page
+produces an error on stderr and exit status 1. Results are printed only after all
+pages succeed, so a failed request does not emit a misleading partial JSON list.
+For a rate limit, wait before retrying; automatic retry scheduling is a later step.
+
+If you previously selected `--data-dir`, use the same option for playlists.
+To verify that local validation is still side-effect-free, run plain startup again.
+
+### Connection manual checks
 
 1. Run plain startup. Expect successful local validation and no browser.
 2. Run `spotify status`. On first use, expect “not connected”.
@@ -138,13 +193,14 @@ short-lived loopback server; no test contacts Spotify or uses real credentials.
 
 `pyproject.toml` declares direct dependencies. `requirements.txt` is an editable
 installation shortcut, not a lockfile. Application code is in `src/tune_sync/`:
-`app.py` dispatches commands, `conf.py` validates settings, and `auth.py` owns
-connection handling. Tests import the installed package normally.
+`app.py` dispatches commands, `conf.py` validates settings, `auth.py` owns
+connection handling, and `playlists.py` normalizes paginated playlist metadata. Tests import the installed package normally.
 
-The original prototype operations remain in `spotify.py`, with an explicit client
-argument. `create_spotify_client(access_token)` creates a noninteractive client.
-Those prototype operations are not exposed by the CLI; matching, pagination, and
-write improvements remain separate planned steps.
+The original search/create prototype operations remain in `spotify.py`, with an
+explicit client argument. The old printing-only playlist/liked-song routine has
+been replaced by the structured listing. `create_spotify_client(access_token)` creates a noninteractive client.
+Those prototype operations are not exposed by the CLI; playlist contents,
+matching, and write improvements remain separate planned steps.
 
 ### API references
 
@@ -152,3 +208,5 @@ write improvements remain separate planned steps.
 - [Redirect URI requirements](https://developer.spotify.com/documentation/web-api/concepts/redirect_uri)
 - [Current-user profile](https://developer.spotify.com/documentation/web-api/reference/get-current-users-profile)
 - [Development-mode requirements](https://developer.spotify.com/documentation/web-api/concepts/quota-modes)
+
+- [Current user playlists and pagination](https://developer.spotify.com/documentation/web-api/reference/get-a-list-of-current-users-playlists)

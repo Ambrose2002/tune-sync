@@ -18,7 +18,7 @@ from spotipy.oauth2 import SpotifyPKCE
 from spotipy.exceptions import SpotifyOauthError, SpotifyException
 
 from tune_sync.auth import (ConnectionError, ConnectionStore, connection_action,
-                            wait_for_callback)
+                            wait_for_callback, PLAYLIST_SCOPE, connected_spotify)
 from tune_sync.conf import Conf
 from tune_sync.app import spotify_command
 
@@ -43,6 +43,24 @@ class ConnectionTests(unittest.TestCase):
     def test_no_connection_never_constructs_auth_or_opens_browser(self):
         with patch("tune_sync.auth.SpotifyPKCE", side_effect=AssertionError("auth")):
             self.assertIsNone(connection_action(self.settings, self.store, "status"))
+
+    def test_listing_requires_new_scopes_without_opening_login(self):
+        self.save()
+        with patch("tune_sync.auth.create_spotify_client", side_effect=AssertionError("API call")), \
+             patch("tune_sync.auth.wait_for_callback", side_effect=AssertionError("browser")):
+            with self.assertRaisesRegex(ConnectionError, "permissions are missing"):
+                with connected_spotify(self.settings, self.store):
+                    self.fail("Old scopes accepted")
+        self.assertEqual(self.store.read()["token"]["scope"], "user-read-private")
+
+    def test_listing_reuses_verified_client_with_read_scopes(self):
+        self.save({**token(), "scope": PLAYLIST_SCOPE})
+        with patch("tune_sync.auth.create_spotify_client") as client:
+            client.return_value.current_user.return_value = self.account
+            with connected_spotify(self.settings, self.store) as (verified, account):
+                self.assertIs(verified, client.return_value)
+                self.assertEqual(account, self.account)
+        client.assert_called_once_with("fake-access")
 
     def test_store_permissions_and_client_isolation(self):
         self.save()
@@ -91,12 +109,12 @@ class ConnectionTests(unittest.TestCase):
 
     def test_connect_exchanges_code_with_pkce_and_verifies_account(self):
         response = Mock()
-        response.json.return_value = {**token(), "expires_in": 3600}
+        response.json.return_value = {**token(), "scope": PLAYLIST_SCOPE, "expires_in": 3600}
         def callback(auth):
             parameters = parse_qs(urlsplit(auth.get_authorize_url()).query)
             self.assertEqual(parameters["code_challenge_method"], ["S256"])
             self.assertTrue(parameters["state"][0])
-            self.assertEqual(parameters["scope"], ["user-read-private"])
+            self.assertEqual(set(parameters["scope"][0].split()), set(PLAYLIST_SCOPE.split()))
             return "fake-code"
         with patch("requests.sessions.Session.post", return_value=response) as post, \
              patch("tune_sync.auth.create_spotify_client") as client:
@@ -120,7 +138,7 @@ class ConnectionTests(unittest.TestCase):
         self.save()
         before = self.store.path.read_bytes()
         response = Mock()
-        response.json.return_value = {**token(), "expires_in": 3600}
+        response.json.return_value = {**token(), "scope": PLAYLIST_SCOPE, "expires_in": 3600}
         with patch("requests.sessions.Session.post", return_value=response), \
              patch("tune_sync.auth.create_spotify_client") as client:
             client.return_value.current_user.side_effect = SpotifyException(403, -1, "denied")

@@ -22,8 +22,9 @@ from spotipy.exceptions import SpotifyException
 
 from .spotify import create_spotify_client
 
-# This checkpoint only identifies the account. Library/write scopes come later.
+# Status remains compatible with Step 3 connections; listing needs read permissions.
 SCOPE = "user-read-private"
+PLAYLIST_SCOPE = SCOPE + " playlist-read-private playlist-read-collaborative"
 
 
 class ConnectionError(ValueError):
@@ -174,41 +175,62 @@ def account_summary(profile):
 
 def connection_action(settings, store, action, *, callback=wait_for_callback):
     """Perform one explicit action. Never fall back to interactive SDK login."""
+    if action not in ("connect", "status", "disconnect"):
+        raise ValueError("Unknown connection action")
     with store.locked():
         if action == "disconnect":
             store.delete()
             return None
-        record = store.read() if action == "status" else None
-        if action == "status" and record is None:
-            return None
-        memory = MemoryCacheHandler(record["token"] if record else None)
-        auth = SpotifyPKCE(
-            client_id=settings.spotify_client_id, redirect_uri=settings.spotify_callback_url,
-            scope=SCOPE, state=secrets.token_urlsafe(32), cache_handler=memory,
-            open_browser=False, requests_timeout=15,
-        )
-        if action == "connect":
-            code = callback(auth)
-            if not code:
-                raise ConnectionError("No authorization code received. Run spotify connect again.")
-            auth.get_access_token(code=code, check_cache=False)
-            token = memory.get_cached_token()
-        else:
-            token = auth.validate_token(record["token"])
-        if not token or not set(SCOPE.split()).issubset(token.get("scope", "").split()):
-            raise ConnectionError("Spotify permissions are missing. Run spotify connect again.")
-        try:
-            profile = create_spotify_client(token["access_token"]).current_user()
-        except SpotifyException as error:
-            if error.http_status != 401:
-                raise
-            token = auth.refresh_access_token(token["refresh_token"])
-            profile = create_spotify_client(token["access_token"]).current_user()
-        account = account_summary(profile)
-        if record:
-            previous = record["account"]
-            identity = "account_id" if previous.get("account_id") and account.get("account_id") else "id"
-            if account.get(identity) != previous.get(identity):
-                raise ConnectionError("The connected account changed. Run spotify connect to select it explicitly.")
-        store.save(token, account)
-        return account
+        scope = PLAYLIST_SCOPE if action == "connect" else SCOPE
+        verified = _verified_client(settings, store, action, callback, scope)
+        return verified[1] if verified else None
+
+
+@contextmanager
+def connected_spotify(settings, store, *, scope=PLAYLIST_SCOPE):
+    """Yield a verified client without login; hold the credential lock during use."""
+    with store.locked():
+        verified = _verified_client(settings, store, "status", None, scope)
+        if verified is None:
+            raise ConnectionError("Spotify is not connected. Run: tune-sync spotify connect")
+        yield verified
+
+
+def _verified_client(settings, store, action, callback, scope):
+    """Verify credentials and identity while the caller holds the store lock."""
+    record = store.read() if action == "status" else None
+    if action == "status" and record is None:
+        return None
+    memory = MemoryCacheHandler(record["token"] if record else None)
+    auth = SpotifyPKCE(
+        client_id=settings.spotify_client_id, redirect_uri=settings.spotify_callback_url,
+        scope=scope, state=secrets.token_urlsafe(32), cache_handler=memory,
+        open_browser=False, requests_timeout=15,
+    )
+    if action == "connect":
+        code = callback(auth)
+        if not code:
+            raise ConnectionError("No authorization code received. Run spotify connect again.")
+        auth.get_access_token(code=code, check_cache=False)
+        token = memory.get_cached_token()
+    else:
+        token = auth.validate_token(record["token"])
+    if not token or not set(scope.split()).issubset(token.get("scope", "").split()):
+        raise ConnectionError("Spotify permissions are missing. Run spotify connect again.")
+    try:
+        client = create_spotify_client(token["access_token"])
+        profile = client.current_user()
+    except SpotifyException as error:
+        if error.http_status != 401:
+            raise
+        token = auth.refresh_access_token(token["refresh_token"])
+        client = create_spotify_client(token["access_token"])
+        profile = client.current_user()
+    account = account_summary(profile)
+    if record:
+        previous = record["account"]
+        identity = "account_id" if previous.get("account_id") and account.get("account_id") else "id"
+        if account.get(identity) != previous.get(identity):
+            raise ConnectionError("The connected account changed. Run spotify connect to select it explicitly.")
+    store.save(token, account)
+    return client, account

@@ -8,44 +8,6 @@ def create_spotify_client(access_token):
     return spotipy.Spotify(auth=access_token, requests_timeout=15, retries=0)
 
 
-def get_playlists(sp):
-    """Print accessible current-user playlists and all liked songs."""
-
-    playlists = sp.current_user_playlists()
-
-    me = sp.current_user()["id"]
-
-    for playlist in playlists["items"]:
-        if playlist["owner"]["id"] != me and not playlist["collaborative"]:
-            print("Skipping inaccessible playlist:", playlist["name"])
-            continue
-
-        items = sp.playlist_items(playlist["id"], limit=50)
-        print(playlist["name"])
-
-        while items:
-            for item in items["items"]:
-                # print(item.get("item").get("name"))
-                continue
-
-            if items["next"]:
-                items = sp.next(items)
-            else:
-                items = None
-
-    liked = sp.current_user_saved_tracks(limit=50)
-
-    while liked:
-        for item in liked["items"]:
-            track = item["track"]
-            print(track["name"], "-", track["artists"][0]["name"])
-
-        if liked["next"]:
-            liked = sp.next(liked)
-        else:
-            liked = None
-
-
 def search_track_uri(sp, track_name):
     """Return the Spotify URI for the first track search result, or None."""
 
