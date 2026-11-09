@@ -17,7 +17,6 @@ class ConfigurationError(ValueError):
 @dataclass(frozen=True, repr=False)
 class Conf:
     spotify_client_id: str
-    spotify_client_secret: str
     spotify_callback_url: str
 
 
@@ -27,7 +26,7 @@ def load_conf(env_file=None):
     default_root = PROJECT_ROOT if (PROJECT_ROOT / "pyproject.toml").is_file() else Path.cwd()
     path = default_root / ".env" if env_file is None else env_file
     values = {**dotenv_values(path, interpolate=False), **os.environ}
-    names = ("SPOTIFY_CLIENT_ID", "SPOTIFY_CLIENT_SECRET", "SPOTIFY_CALLBACK_URL")
+    names = ("SPOTIFY_CLIENT_ID", "SPOTIFY_CALLBACK_URL")
     settings = {name: (values.get(name) or "").strip() for name in names}
     errors = []
     for name, value in settings.items():

@@ -13,7 +13,6 @@ from tune_sync.conf import ConfigurationError, load_conf
 
 VALID = {
     "SPOTIFY_CLIENT_ID": "test-client",
-    "SPOTIFY_CLIENT_SECRET": "test-secret",
     "SPOTIFY_CALLBACK_URL": "http://127.0.0.1:8000/callback",
 }
 
@@ -50,8 +49,8 @@ class ConfigurationTests(unittest.TestCase):
             self.assertIn(name, str(error.exception))
 
     def test_example_credentials_are_rejected(self):
-        os.environ["SPOTIFY_CLIENT_SECRET"] = "your-spotify-client-secret"
-        with self.assertRaisesRegex(ConfigurationError, "SPOTIFY_CLIENT_SECRET is required"):
+        os.environ["SPOTIFY_CLIENT_ID"] = "your-spotify-client-id"
+        with self.assertRaisesRegex(ConfigurationError, "SPOTIFY_CLIENT_ID is required"):
             load_conf(self.env_file)
 
     def test_redirect_validation_and_no_secret_in_errors(self):
@@ -78,7 +77,7 @@ class ConfigurationTests(unittest.TestCase):
     def test_import_and_startup_never_initialize_spotify(self):
         with patch.dict(os.environ, VALID), \
              patch("spotipy.Spotify", side_effect=AssertionError("Client initialized")), \
-             patch("spotipy.oauth2.SpotifyOAuth", side_effect=AssertionError("OAuth initialized")), \
+             patch("spotipy.oauth2.SpotifyPKCE", side_effect=AssertionError("OAuth initialized")), \
              patch("tune_sync.conf.PROJECT_ROOT", Path(self.directory.name)), \
              contextlib.redirect_stdout(io.StringIO()) as output:
             from tune_sync import app

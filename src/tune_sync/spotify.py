@@ -1,29 +1,11 @@
 """Existing Spotify prototype operations with an explicitly supplied client."""
 
 import spotipy
-from spotipy.oauth2 import SpotifyOAuth
-
-from .conf import Conf
-
-scope = (
-    "user-read-private "
-    "playlist-read-private "
-    "playlist-read-collaborative "
-    "user-library-read "
-    "playlist-modify-public "
-    "playlist-modify-private"
-)
 
 
-def create_spotify_client(conf: Conf, *, cache_path):
-    """Construct a client from explicit settings and a caller-selected cache path."""
-    return spotipy.Spotify(auth_manager=SpotifyOAuth(
-        client_id=conf.spotify_client_id,
-        client_secret=conf.spotify_client_secret,
-        redirect_uri=conf.spotify_callback_url,
-        scope=scope,
-        cache_path=str(cache_path)
-    ))
+def create_spotify_client(access_token):
+    """Construct a noninteractive client from an explicitly obtained access token."""
+    return spotipy.Spotify(auth=access_token, requests_timeout=15, retries=0)
 
 
 def get_playlists(sp):

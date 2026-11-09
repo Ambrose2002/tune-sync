@@ -10,7 +10,6 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
-from tune_sync.conf import Conf
 from tune_sync.spotify import create_playlist, create_spotify_client
 
 
@@ -49,15 +48,11 @@ class PackageTests(unittest.TestCase):
             self.assertEqual(main(["--env-file", str(Path(directory) / "missing")]), 1)
             self.assertIn("existing file", errors.getvalue())
 
-    def test_client_factory_uses_supplied_configuration(self):
-        settings = Conf("fake-id", "fake-secret", "http://127.0.0.1:8000/callback")
-        with patch("tune_sync.spotify.SpotifyOAuth") as oauth, \
-             patch("tune_sync.spotify.spotipy.Spotify") as client:
-            result = create_spotify_client(settings, cache_path=Path("chosen-cache"))
+    def test_client_factory_uses_only_supplied_token(self):
+        with patch("tune_sync.spotify.spotipy.Spotify") as client:
+            result = create_spotify_client("fake-access-token")
         self.assertIs(result, client.return_value)
-        self.assertEqual(oauth.call_args.kwargs["client_id"], settings.spotify_client_id)
-        self.assertEqual(oauth.call_args.kwargs["cache_path"], "chosen-cache")
-        client.assert_called_once_with(auth_manager=oauth.return_value)
+        client.assert_called_once_with(auth="fake-access-token", requests_timeout=15, retries=0)
 
     def test_create_and_search_share_the_supplied_client(self):
         client = Mock()

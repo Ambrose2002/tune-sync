@@ -2,87 +2,153 @@
 
 A tool for transferring playlists between music streaming services.
 
-## Current checkpoint: package and explicit dependencies
+## Current checkpoint: Spotify connection and status
 
-The project currently contains a Spotify prototype. Running the application only
-validates local settings. It does not open a login page, fetch your library, or
-create a playlist. Cross-service transfers are not implemented yet.
+Tune Sync currently validates settings and connects a Spotify account using
+Authorization Code with PKCE. Cross-service transfers are not implemented yet.
+The CLI connection workflow currently supports macOS and Linux.
 
 ### Setup
 
-Use the existing `myenv` environment, or create one and install dependencies:
+Use the existing `myenv`, or create one, then install the project:
 
 ```sh
 python3 -m venv myenv
 myenv/bin/python -m pip install -e .
 ```
 
-If you do not already have `.env`, copy `.env.example` to `.env`. Fill in
-`SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET` from your Spotify app settings.
-Set `SPOTIFY_CALLBACK_URL` to a redirect URI registered in that app. For local
-development, the example uses `http://127.0.0.1:8000/callback`; `localhost` is not
-accepted. This checkpoint does not start a callback server.
+If `.env` does not exist, copy `.env.example` to `.env`. Set:
 
-For the editable install above, the project-root `.env` is loaded regardless of
-the working directory. A regular (non-editable) installation uses `.env` in the
-launch directory. Pass `--env-file /absolute/path/to/.env` to select a file
-explicitly; an explicitly selected file must exist. Exported
-environment variables override it, including empty values. Settings are checked
-for missing values, example placeholders, and invalid redirect URLs. This is
-local validation, not verification that Spotify accepts the credentials.
+- `SPOTIFY_CLIENT_ID`: your Spotify developer application's client ID.
+- `SPOTIFY_CALLBACK_URL`: for example `http://127.0.0.1:8000/callback`.
+  Register that exact redirect URI in the Spotify developer dashboard.
+
+PKCE does not require a client secret. An existing `SPOTIFY_CLIENT_SECRET` is
+ignored; Tune Sync does not edit your `.env` or automatically remove it.
+
+For local login, use HTTP with `127.0.0.1` or `[::1]`, an explicit nonzero port,
+and no query string. `localhost` is not accepted. Configuration validation also
+accepts HTTPS URLs, but this checkpoint's local login cannot serve HTTPS callbacks.
+
+For the editable installation, settings default to the checkout's `.env`, even
+when launched from another directory. Regular installations default to `.env` in
+the launch directory. Process environment variables override file settings,
+including empty values. To select a file explicitly, place `--env-file` before
+the command:
 
 ```sh
-myenv/bin/python -m tune_sync
+myenv/bin/python -m tune_sync --env-file /absolute/path/to/.env spotify status
 ```
 
-Valid settings print a success message and exit with status 0. Invalid settings
-print the affected variable names and exit with status 1, without printing
-credential values. Your existing `.env` and token cache are not modified.
+### Commands
 
-### Manual checks
+```sh
+# Local validation only: no browser, account requests, or playlist changes.
+myenv/bin/python -m tune_sync
 
-1. Run the command above with valid settings. Confirm that no browser opens and
-   no playlist is created.
-2. Run `SPOTIFY_CLIENT_ID='' myenv/bin/python -m tune_sync`. Expect a clear missing
-   client-ID error. This overrides the value only for this invocation.
-3. Run `SPOTIFY_CALLBACK_URL='http://localhost:8000/callback' myenv/bin/python -m tune_sync`.
-   Expect an error explaining the supported redirect URLs.
-4. Run the original command again. It should succeed; `.env` was not changed.
+# Open Spotify authorization, receive the callback, and verify the account.
+myenv/bin/python -m tune_sync spotify connect
 
-### Automated checks
+# Verify the saved account; refresh expired credentials without opening a browser.
+myenv/bin/python -m tune_sync spotify status
+
+# Remove the local connection for this client ID.
+myenv/bin/python -m tune_sync spotify disconnect
+```
+
+`myenv/bin/tune-sync` is an equivalent entry point. The old `python src/app.py`
+entry point has been replaced.
+
+Connect requests only `user-read-private`, sufficient to identify the account.
+Library and playlist permissions will be introduced with their corresponding
+features. The callback listener runs only during login, binds only to loopback,
+validates the callback path and OAuth state, and closes after success, denial,
+Ctrl-C, or a three-minute timeout. If the browser does not open, visit the printed
+Spotify authorization URL. A busy callback port produces an actionable error.
+
+Connect always starts a fresh authorization attempt. It replaces the existing
+connection only after Spotify returns an account profile successfully. Confirm
+the displayed account after login; to switch accounts, sign into the desired
+Spotify account in your browser and run connect again. Status never starts login.
+It detects a different account instead of silently replacing the saved identity.
+
+Status without a saved connection reports “not connected” and exits successfully;
+a failed verification exits with status 1. Ctrl-C during a connection command
+exits with status 130. Transient network failures leave the saved connection in
+place. Revoked authorization requires a new connect command.
+
+### Credential storage
+
+Tokens are stored as permission-protected JSON outside the repository, under:
+
+- macOS: `~/Library/Application Support/tune-sync/spotify/`
+- Linux: `~/.local/share/tune-sync/spotify/`
+
+Files are separated by a hash of the client ID. The credential directory is
+restricted to its owner (`0700`); token files are created with owner-only access
+(`0600`) and replaced atomically. This is local file storage, not encrypted OS
+Keychain storage. Concurrent connection commands for the same client ID are
+blocked to prevent refresh/write races.
+
+Use `spotify connect --data-dir /path/to/tune-sync-data` to select another base
+directory. Use the same override for status and disconnect. Keep this directory
+outside the repository. Only its dedicated `spotify/` child receives credentials.
+
+The old project-root `.spotify_cache` is neither imported nor changed. Disconnect
+removes only the new local token record; it does not revoke Spotify's app grant or
+remove the legacy cache. To revoke provider authorization, remove the app from
+your Spotify account's Apps page.
+
+### Manual acceptance checks
+
+1. Run plain startup. Expect successful local validation and no browser.
+2. Run `spotify status`. On first use, expect “not connected”.
+3. Run `spotify connect`, authorize in the browser, and return to the terminal.
+   Confirm the displayed name and account identifier match the intended account.
+4. Run `spotify status` in a fresh terminal. Expect the same account without login.
+5. Run `spotify connect` again and deny authorization. Expect a clear error; status
+   should still verify the previous connection if its grant remains valid.
+6. Run `spotify disconnect`, then status. Expect “not connected”. Reconnect to
+   restore access.
+7. For account switching, log into another allowed Spotify account in the browser,
+   connect again, and confirm status identifies the newly selected account.
+8. Optional: after the token expires, status should still work without login.
+   Refresh behavior is also covered by offline tests, so waiting is not required.
+
+No command in this checkpoint creates, edits, or deletes playlists. If Spotify
+returns 403, check that the user is allowlisted for the development app and that
+the app owner meets Spotify's Premium requirement. If the registered callback
+and configured callback differ, correct them and retry connect.
+
+Configuration errors can be tested without editing `.env`:
+
+```sh
+SPOTIFY_CLIENT_ID='' myenv/bin/python -m tune_sync
+SPOTIFY_CALLBACK_URL='http://localhost:8000/callback' myenv/bin/python -m tune_sync
+```
+
+### Automated checks and structure
 
 ```sh
 myenv/bin/python -m unittest discover -s tests -v
 ```
 
-The checks use fake settings and block Spotify client construction. They do not
-authenticate or use your real credentials.
+Tests use temporary stores and fake Spotify responses. Callback tests start a
+short-lived loopback server; no test contacts Spotify or uses real credentials.
 
-### Package layout and entry points
+`pyproject.toml` declares direct dependencies. `requirements.txt` is an editable
+installation shortcut, not a lockfile. Application code is in `src/tune_sync/`:
+`app.py` dispatches commands, `conf.py` validates settings, and `auth.py` owns
+connection handling. Tests import the installed package normally.
 
-Install with `myenv/bin/python -m pip install -e .` even if you already have the
-dependencies from Step 1. The editable install makes source edits available
-immediately. `pyproject.toml` declares the direct dependencies; `requirements.txt`
-is a compatibility shortcut to that installation, not a dependency lockfile.
+The original prototype operations remain in `spotify.py`, with an explicit client
+argument. `create_spotify_client(access_token)` creates a noninteractive client.
+Those prototype operations are not exposed by the CLI; matching, pagination, and
+write improvements remain separate planned steps.
 
-Both entry points perform the same local validation:
+### API references
 
-```sh
-myenv/bin/python -m tune_sync
-myenv/bin/tune-sync
-myenv/bin/python -m tune_sync --env-file /absolute/path/to/.env
-```
-
-The old `python src/app.py` entry point has been replaced. Application code lives
-in `src/tune_sync/`; tests import the installed package normally.
-
-The existing prototype functions in `tune_sync.spotify` now take a Spotify client
-as their first argument. `create_spotify_client(settings, cache_path=...)` builds
-a client only when explicitly called. It does not load configuration or select
-a cache path itself. Startup never calls it. The prototype's matching and
-playlist behavior remain unchanged; their improvements belong to later steps.
-
-For Step 2 acceptance, run both entry points, repeat the invalid-setting checks
-above, and run the automated tests. From another directory, invoke the installed
-`myenv/bin/python` by its absolute path with `-m tune_sync` and confirm that the
-editable installation still finds the checkout's settings.
+- [Spotify PKCE flow](https://developer.spotify.com/documentation/web-api/tutorials/code-pkce-flow)
+- [Redirect URI requirements](https://developer.spotify.com/documentation/web-api/concepts/redirect_uri)
+- [Current-user profile](https://developer.spotify.com/documentation/web-api/reference/get-current-users-profile)
+- [Development-mode requirements](https://developer.spotify.com/documentation/web-api/concepts/quota-modes)
