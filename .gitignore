@@ -1,5 +1,9 @@
 /myenv
 .env
-__pycache__
+.env.*
+!.env.example
+__pycache__/
+*.py[cod]
 .spotify_cache
-*.txt
+/.DS_Store
+/out.txt
