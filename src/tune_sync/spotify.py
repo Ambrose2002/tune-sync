@@ -1,10 +1,9 @@
-import sys
-from functools import lru_cache
+"""Existing Spotify prototype operations with an explicitly supplied client."""
 
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 
-from conf import ConfigurationError, PROJECT_ROOT, load_conf
+from .conf import Conf
 
 scope = (
     "user-read-private "
@@ -16,23 +15,20 @@ scope = (
 )
 
 
-@lru_cache(maxsize=1)
-def get_spotify_client():
-    """Initialize the prototype client only when explicitly used."""
-    conf = load_conf()
+def create_spotify_client(conf: Conf, *, cache_path):
+    """Construct a client from explicit settings and a caller-selected cache path."""
     return spotipy.Spotify(auth_manager=SpotifyOAuth(
         client_id=conf.spotify_client_id,
         client_secret=conf.spotify_client_secret,
         redirect_uri=conf.spotify_callback_url,
         scope=scope,
-        cache_path=str(PROJECT_ROOT / ".spotify_cache")
+        cache_path=str(cache_path)
     ))
 
 
-def get_playlists():
+def get_playlists(sp):
     """Print accessible current-user playlists and all liked songs."""
 
-    sp = get_spotify_client()
     playlists = sp.current_user_playlists()
 
     me = sp.current_user()["id"]
@@ -68,10 +64,10 @@ def get_playlists():
             liked = None
 
 
-def search_track_uri(track_name):
+def search_track_uri(sp, track_name):
     """Return the Spotify URI for the first track search result, or None."""
 
-    result = get_spotify_client().search(q=track_name, type="track", limit=1)
+    result = sp.search(q=track_name, type="track", limit=1)
     tracks = result["tracks"]["items"]
 
     if not tracks:
@@ -80,40 +76,25 @@ def search_track_uri(track_name):
     return tracks[0]["uri"]
 
 
-def create_playlist(name, items, public = True, collaborative=False, description=""):
+def create_playlist(sp, name, items, public=True, collaborative=False, description=""):
     """Create a Spotify playlist from a list of track names and return it."""
 
-    sp = get_spotify_client()
     playlist = sp.current_user_playlist_create(name, public, collaborative, description)
     playlist_id = playlist["id"]
-    
+
     uris = []
-    
+
     for track_name in items:
-        uri = search_track_uri(track_name)
+        uri = search_track_uri(sp, track_name)
         if uri:
             uris.append(uri)
-            
+
         else:
             print("Could not find:", track_name)
-    
+
     if uris:
         result = sp.playlist_add_items(playlist_id, uris)
         print(result)
-    
+
     return playlist
 
-
-def main():
-    """Check local configuration only; no login or Spotify API calls."""
-    try:
-        load_conf()
-    except ConfigurationError as error:
-        print(f"Configuration error:\n{error}", file=sys.stderr)
-        return 1
-    print("Configuration is valid. No login or Spotify API requests were made.")
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())

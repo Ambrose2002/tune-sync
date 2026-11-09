@@ -7,3 +7,6 @@ __pycache__/
 .spotify_cache
 /.DS_Store
 /out.txt
+*.egg-info/
+/build/
+/dist/

@@ -5,13 +5,11 @@ import importlib
 import io
 import os
 from pathlib import Path
-import sys
 import tempfile
 import unittest
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from conf import ConfigurationError, load_conf
+from tune_sync.conf import ConfigurationError, load_conf
 
 VALID = {
     "SPOTIFY_CLIENT_ID": "test-client",
@@ -24,6 +22,7 @@ class ConfigurationTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
+        (Path(self.directory.name) / "pyproject.toml").touch()
         self.env_file = Path(self.directory.name) / ".env"
         self.env_file.write_text("\n".join(f'{k}="{v}"' for k, v in VALID.items()))
         self.environment = patch.dict(os.environ, {}, clear=True)
@@ -73,22 +72,22 @@ class ConfigurationTests(unittest.TestCase):
             self.assertEqual(load_conf(self.env_file).spotify_callback_url, callback)
 
     def test_default_env_path_is_independent_of_working_directory(self):
-        with patch("conf.PROJECT_ROOT", Path(self.directory.name)):
+        with patch("tune_sync.conf.PROJECT_ROOT", Path(self.directory.name)):
             self.assertEqual(load_conf().spotify_client_id, "test-client")
 
     def test_import_and_startup_never_initialize_spotify(self):
         with patch.dict(os.environ, VALID), \
              patch("spotipy.Spotify", side_effect=AssertionError("Client initialized")), \
              patch("spotipy.oauth2.SpotifyOAuth", side_effect=AssertionError("OAuth initialized")), \
-             patch("conf.PROJECT_ROOT", Path(self.directory.name)), \
+             patch("tune_sync.conf.PROJECT_ROOT", Path(self.directory.name)), \
              contextlib.redirect_stdout(io.StringIO()) as output:
-            import app
+            from tune_sync import app
             importlib.reload(app)
-            self.assertEqual(app.main(), 0)
+            self.assertEqual(app.main([]), 0)
             self.assertIn("No login or Spotify API requests", output.getvalue())
             os.environ["SPOTIFY_CLIENT_ID"] = ""
             with contextlib.redirect_stderr(io.StringIO()) as errors:
-                self.assertEqual(app.main(), 1)
+                self.assertEqual(app.main([]), 1)
             self.assertIn("SPOTIFY_CLIENT_ID", errors.getvalue())
             self.assertNotIn("test-secret", errors.getvalue())
 

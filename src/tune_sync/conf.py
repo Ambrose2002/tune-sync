@@ -7,7 +7,7 @@ from urllib.parse import urlsplit
 
 from dotenv import dotenv_values
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class ConfigurationError(ValueError):
@@ -23,7 +23,9 @@ class Conf:
 
 def load_conf(env_file=None):
     """Read the project .env; process environment variables take precedence."""
-    path = PROJECT_ROOT / ".env" if env_file is None else env_file
+    # Editable installs use the checkout; regular installs use the launch directory.
+    default_root = PROJECT_ROOT if (PROJECT_ROOT / "pyproject.toml").is_file() else Path.cwd()
+    path = default_root / ".env" if env_file is None else env_file
     values = {**dotenv_values(path, interpolate=False), **os.environ}
     names = ("SPOTIFY_CLIENT_ID", "SPOTIFY_CLIENT_SECRET", "SPOTIFY_CALLBACK_URL")
     settings = {name: (values.get(name) or "").strip() for name in names}
