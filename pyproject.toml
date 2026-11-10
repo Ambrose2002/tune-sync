@@ -12,6 +12,8 @@ dependencies = [
     "python-dotenv==1.2.2",
     "spotipy==2.26.0",
     "requests==2.33.1",
+    "PyJWT[crypto]==2.15.1",
+    "cryptography>=43",
 ]
 
 [project.scripts]

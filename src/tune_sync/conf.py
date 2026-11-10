@@ -1,6 +1,7 @@
 """Load and validate local settings without exposing credential values."""
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -20,12 +21,18 @@ class Conf:
     spotify_callback_url: str
 
 
-def load_conf(env_file=None):
-    """Read the project .env; process environment variables take precedence."""
+def _load_values(env_file=None):
+    """Read settings without changing the process environment."""
     # Editable installs use the checkout; regular installs use the launch directory.
     default_root = PROJECT_ROOT if (PROJECT_ROOT / "pyproject.toml").is_file() else Path.cwd()
     path = default_root / ".env" if env_file is None else env_file
-    values = {**dotenv_values(path, interpolate=False), **os.environ}
+    path = Path(path).expanduser().resolve()
+    return {**dotenv_values(path, interpolate=False), **os.environ}, path.parent
+
+
+def load_conf(env_file=None):
+    """Read Spotify settings; process environment variables take precedence."""
+    values, _ = _load_values(env_file)
     names = ("SPOTIFY_CLIENT_ID", "SPOTIFY_CALLBACK_URL")
     settings = {name: (values.get(name) or "").strip() for name in names}
     errors = []
@@ -62,3 +69,42 @@ def load_conf(env_file=None):
     if errors:
         raise ConfigurationError("\n".join(errors))
     return Conf(*(settings[name] for name in names))
+
+
+@dataclass(frozen=True, repr=False)
+class AppleConf:
+    team_id: str
+    key_id: str
+    private_key_path: Path
+    storefront: str
+
+
+def validate_storefront(value):
+    if not isinstance(value, str) or not re.fullmatch(r"[a-zA-Z]{2}", value):
+        raise ConfigurationError("APPLE_STOREFRONT must be a two-letter storefront code, such as us or gb.")
+    return value.lower()
+
+
+def load_apple_conf(env_file=None):
+    """Validate Apple settings independently of Spotify credentials."""
+    values, directory = _load_values(env_file)
+    errors = []
+    identifiers = {}
+    for name in ("APPLE_TEAM_ID", "APPLE_KEY_ID"):
+        value = (values.get(name) or "").strip()
+        if not re.fullmatch(r"[A-Z0-9]{10}", value):
+            errors.append(f"{name} must be your 10-character Apple developer identifier.")
+        identifiers[name] = value
+    key_path = (values.get("APPLE_PRIVATE_KEY_PATH") or "").strip()
+    if not key_path or key_path.startswith("your-"):
+        errors.append("APPLE_PRIVATE_KEY_PATH must point to your downloaded MusicKit .p8 private key.")
+    try:
+        storefront = validate_storefront((values.get("APPLE_STOREFRONT", "us") or "").strip())
+    except ConfigurationError as error:
+        errors.append(str(error))
+    if errors:
+        raise ConfigurationError("\n".join(errors))
+    path = Path(key_path).expanduser()
+    if not path.is_absolute():
+        path = directory / path
+    return AppleConf(identifiers["APPLE_TEAM_ID"], identifiers["APPLE_KEY_ID"], path, storefront)

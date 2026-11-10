@@ -19,6 +19,11 @@ def main(argv=None):
     spotify.add_argument("playlist_id", nargs="?", help="Playlist ID for the playlist command")
     spotify.add_argument("--data-dir", type=Path, help="Application data directory override")
     spotify.add_argument("--json", action="store_true", help="Emit playlist listings or snapshots as JSON")
+    apple = commands.add_parser("apple", help="Check Apple developer credentials or look up a catalog song")
+    apple.add_argument("action", choices=("check", "song"))
+    apple.add_argument("song_id", nargs="?", help="Numeric catalog song ID (song command only)")
+    apple.add_argument("--storefront", help="Override the configured catalog region, e.g. us")
+    apple.add_argument("--json", action="store_true", help="Emit catalog song metadata as JSON")
     args = parser.parse_args(argv)
     if args.provider == "spotify" and args.json and args.action not in ("playlists", "playlist"):
         parser.error("--json is only available for spotify playlists or spotify playlist")
@@ -35,6 +40,13 @@ def main(argv=None):
     if args.env_file is not None and not args.env_file.is_file():
         print("Configuration error: --env-file must point to an existing file.", file=sys.stderr)
         return 1
+    if args.provider == "apple":
+        if args.action == "check" and (args.song_id is not None or args.json or args.storefront is not None):
+            parser.error("apple check does not accept a song ID, --json, or --storefront")
+        if args.action == "song" and args.song_id is None:
+            parser.error("apple song requires a numeric catalog song ID")
+        return apple_command(args.env_file, args.action, args.song_id,
+                             storefront=args.storefront, json_output=args.json)
     try:
         settings = load_conf(args.env_file)
     except (ConfigurationError, OSError) as error:
@@ -145,3 +157,40 @@ def print_snapshot(snapshot, account, *, json_output=False):
         reason = f" ({json.dumps(entry.reason)})" if entry.reason else ""
         print(f"{entry.position + 1}. {json.dumps(name)} — {json.dumps(artists)} "
               f"[{entry.status}]{reason}")
+
+
+def apple_command(env_file, action, song_id=None, *, storefront=None, json_output=False):
+    from dataclasses import replace
+    import requests
+    from .conf import load_apple_conf, validate_storefront
+    from .apple import AppleAPIError, generate_developer_token, get_catalog_song, validate_song_id
+
+    try:
+        if action == "song":
+            validate_song_id(song_id)
+        settings = load_apple_conf(env_file)
+        if storefront is not None:
+            settings = replace(settings, storefront=validate_storefront(storefront))
+        developer_token = generate_developer_token(settings)
+        if action == "check":
+            print("Apple settings and P-256 signing key are valid locally. No Apple API request was made; developer access is not yet verified.")
+            return 0
+        with requests.Session() as session:
+            song = get_catalog_song(developer_token, song_id, storefront=settings.storefront, session=session)
+        if json_output:
+            print(json.dumps({"provider": "apple_music", "song": asdict(song)}, indent=2))
+        else:
+            print(f"Apple Music catalog access verified ({song.storefront}).")
+            print(f"{json.dumps(song.name)} — {json.dumps(song.artist_name)}")
+            print(f"ID: {song.id} | Album: {json.dumps(song.album_name)} | ISRC: {json.dumps(song.isrc)}")
+            print(f"URL: {json.dumps(song.url)}")
+        return 0
+    except (ConfigurationError, AppleAPIError) as error:
+        message = str(error)
+    except OSError:
+        message = "Cannot read Apple configuration. Check the settings file permissions."
+    except KeyboardInterrupt:
+        print("Apple Music request cancelled.", file=sys.stderr)
+        return 130
+    print(f"Apple Music error: {message}", file=sys.stderr)
+    return 1

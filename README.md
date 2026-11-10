@@ -2,10 +2,11 @@
 
 A tool for transferring playlists between music streaming services.
 
-## Current checkpoint: complete Spotify playlist snapshots
+## Current checkpoint: Apple developer tokens and catalog access
 
 Tune Sync validates settings, connects a Spotify account using Authorization
 Code with PKCE, lists playlists, and reads ordered playlist snapshots.
+It also validates an Apple Music developer key and looks up catalog songs.
 Cross-service transfers are not implemented yet.
 The CLI connection workflow currently supports macOS and Linux.
 
@@ -111,6 +112,93 @@ The old project-root `.spotify_cache` is neither imported nor changed. Disconnec
 removes only the new local token record; it does not revoke Spotify's app grant or
 remove the legacy cache. To revoke provider authorization, remove the app from
 your Spotify account's Apps page.
+
+### Apple setup and Step 6 manual checks
+
+Apple commands validate only Apple settings; you can use them without Spotify
+credentials. Spotify commands and plain startup continue to validate only Spotify
+settings, so adding Apple placeholders does not break existing commands.
+
+This checkpoint requires Apple Developer Program access and a Media Services key
+with MusicKit enabled. In Apple's developer account, create a media identifier,
+enable MusicKit, associate a Media Services private key, and download its `.p8`
+file. Record the Key ID and your Team ID. Apple's
+[key setup instructions](https://developer.apple.com/help/account/capabilities/create-a-media-identifier-and-private-key)
+explain these steps. An ordinary Apple Music subscription alone does not provide
+the developer signing key. User-library authorization comes in Step 7.
+
+Keep the downloaded key outside this repository and add these settings to your
+existing `.env` (do not replace your Spotify settings):
+
+```dotenv
+APPLE_TEAM_ID="your-team-id"
+APPLE_KEY_ID="your-key-id"
+APPLE_PRIVATE_KEY_PATH="/absolute/path/to/AuthKey_YOURKEYID.p8"
+APPLE_STOREFRONT="us"
+```
+
+Replace the Team ID and Key ID placeholders with the real 10-character identifiers.
+`APPLE_PRIVATE_KEY_PATH` supports `~`; a relative path resolves against the selected
+`.env` file's directory, including when the path is supplied through an environment
+variable. `APPLE_STOREFRONT` defaults to `us` when omitted; an explicitly empty
+value is invalid. Storefront codes are normalized to lowercase. A syntactically
+valid code still needs to be supported by Apple's catalog.
+
+Install the added signing dependencies (already installed in this workspace's
+`myenv` during implementation), then check local setup:
+
+```sh
+myenv/bin/python -m pip install -e .
+myenv/bin/python -m tune_sync apple check
+```
+
+`apple check` loads the key and signs a one-hour ES256 developer token locally.
+It verifies the key is an unencrypted P-256 private key. It does not call Apple,
+prove the key belongs to the stated Team/Key IDs, or establish that the key has
+MusicKit access. Neither private key material nor developer tokens are printed or
+saved. Tokens are generated fresh in memory per command; the `.p8` file is never
+modified. Downloaded `.p8` files are also ignored by Git as a precaution.
+
+To verify real API access, choose a song from Apple Music and copy its numeric
+**song** ID. In an album share URL containing `?i=123456789`, use the `i` value,
+not the album ID in the path. A `/song/.../123456789` URL uses its final numeric ID.
+Use the corresponding storefront from the link where possible:
+
+```sh
+myenv/bin/python -m tune_sync apple song SONG_ID
+myenv/bin/python -m tune_sync apple song SONG_ID --storefront us --json
+```
+
+Replace `SONG_ID` with the numeric value. Library IDs, album IDs, and whole URLs
+are not accepted as song references. If the catalog lookup succeeds, compare the
+title and artist with Apple Music. JSON is one document containing `provider` and
+`song`, with ID, storefront, title, artist display name, album, duration, ISRC,
+content rating, and URL. Optional absent fields stay `null`. Artist display text
+is preserved as Apple returns it, rather than guessed into separate artists.
+
+This command sends only the developer token to the Apple Music catalog endpoint.
+It does not request a Music User Token, open a login page, access a personal
+library, play audio, or write playlists. Requests have a 15-second timeout and do
+not follow redirects or retry automatically.
+
+For negative checks, use a temporary override without editing `.env`:
+
+```sh
+APPLE_KEY_ID='' myenv/bin/python -m tune_sync apple check
+APPLE_PRIVATE_KEY_PATH='/nonexistent/musickit-key.p8' myenv/bin/python -m tune_sync apple check
+```
+
+Expect actionable errors, no credential values, and exit status 1. A 401 from
+Apple suggests checking the Team ID, Key ID, key, and system clock; 403 suggests
+checking MusicKit access. A 404 or empty result means the song was not found in
+that storefront. For 429, wait before retrying. HTTP errors never emit a partial
+song JSON document. Denied/expired tokens and rate limits are tested offline, so
+you do not need to provoke them on your real account.
+
+After testing Apple, run plain startup and `spotify status` to confirm your
+existing Spotify workflow still works. If you do not have Apple developer access
+yet, the implementation's offline checks can pass, but live Apple acceptance
+remains pending until you obtain the credentials.
 
 ### Playlist snapshots and Step 5 manual checks
 
@@ -253,14 +341,15 @@ SPOTIFY_CALLBACK_URL='http://localhost:8000/callback' myenv/bin/python -m tune_s
 myenv/bin/python -m unittest discover -s tests -v
 ```
 
-Tests use temporary stores and fake Spotify responses. Callback tests start a
-short-lived loopback server; no test contacts Spotify or uses real credentials.
+Tests use temporary stores, generated test signing keys, and fake provider responses. Callback tests start a
+short-lived loopback server; no test contacts Spotify/Apple or uses real credentials.
 
 `pyproject.toml` declares direct dependencies. `requirements.txt` is an editable
 installation shortcut, not a lockfile. Application code is in `src/tune_sync/`:
 `app.py` dispatches commands, `conf.py` validates settings, `auth.py` owns
 connection handling, `playlists.py` normalizes paginated playlist metadata, and
-`snapshots.py` reads and verifies complete playlist snapshots. Tests import the installed package normally.
+`snapshots.py` reads and verifies complete playlist snapshots. `apple.py` signs
+developer tokens and retrieves Apple catalog songs. Tests import the installed package normally.
 
 The original search/create prototype operations remain in `spotify.py`, with an
 explicit client argument. The old printing-only playlist/liked-song routine has
@@ -279,3 +368,6 @@ improvements remain separate planned steps.
 
 - [Playlist items](https://developer.spotify.com/documentation/web-api/reference/get-playlists-items)
 - [Playlist metadata and snapshot IDs](https://developer.spotify.com/documentation/web-api/reference/get-playlist)
+
+- [Apple developer tokens](https://developer.apple.com/documentation/applemusicapi/generating-developer-tokens)
+- [Apple catalog song lookup](https://developer.apple.com/documentation/applemusicapi/get-a-catalog-song)
